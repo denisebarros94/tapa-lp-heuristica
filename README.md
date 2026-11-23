@@ -29,10 +29,15 @@ tapa-lp-heuristica/
 │   │   ├── api.py  model.py  patterns.py
 │   │   ├── propagation.py  solver.py  verifier.py
 │   └── tapa_lp/                    # NOVO: heurística de PL
-│       ├── lp_model.py             # a relaxação linear
+│       ├── lp_model.py             # relaxação linear (PuLP/CBC, fallback)
+│       ├── highs_backend.py        # relaxação persistente (highspy, opcional)
 │       ├── solver_lp.py            # busca com PL integrada
 │       ├── io_puzzles.py           # leitura/escrita de tabuleiros .txt
-│       └── cli.py                  # comandos solve e bench
+│       ├── uniqueness.py           # contagem de soluções
+│       ├── instrumented.py         # motor determinístico com progresso
+│       ├── jobs.py  runs.py        # API web: jobs e histórico
+│       ├── server.py               # frontend + API na mesma porta
+│       └── cli.py                  # comandos solve, bench e check
 └── tests/
     ├── test_api.py                 # teste original da API
     └── test_lp.py                  # correção das deduções da PL
@@ -61,6 +66,45 @@ python -m pip install -e ".[dev]"
 ```
 
 O solver CBC vem embutido no pacote `pulp`; não é preciso instalar nada além.
+
+Para o backend rápido de PL (recomendado), instale o extra `highs`:
+
+```bash
+python -m pip install -e ".[dev,highs]"
+```
+
+Sem `highspy`, o projeto continua funcionando com o backend PuLP/CBC.
+
+## Backend de PL: PuLP/CBC vs highspy persistente
+
+O PuLP reescreve o modelo e reinicia o solver **a cada resolução** (~6–10 ms
+neste projeto). O `highs_backend.py` monta o modelo **uma vez** no `highspy` e,
+em cada nó, troca apenas os bounds — o mesmo princípio do Cap. 8.3 do manual.
+O custo cai para ~0,1–0,2 ms por resolução (**~30–50×**), mantendo exatamente
+as mesmas restrições e a mesma regra de dedução (só `Infeasible` prova).
+
+O backend é escolhido por `LPConfig(lp_backend=...)`:
+
+| valor | comportamento |
+|---|---|
+| `"auto"` (padrão) | highspy se estiver instalado; senão PuLP |
+| `"highs"` | força highspy (se instalado) |
+| `"pulp"` | mantém o backend antigo (CBC, ou HiGHS do PuLP) |
+
+`connectivity_lp=True` sempre usa o PuLP, porque o backend highspy implementa
+só o modelo sem fluxo (a configuração padrão).
+
+### Medição no piloto (89 tabuleiros × 3 métodos, 3 s, 4 workers)
+
+| backend | resolvidos | tempo de parede |
+|---|---|---|
+| PuLP/CBC | 121/267 (45,3%) | 127 s |
+| **highspy persistente** | **185/267 (69,3%)** | **72 s (-43%)** |
+
+Mesma máquina, mesmos tabuleiros e mesmo orçamento por execução. O ganho não
+vem de procurar mais nós "no escuro": o teste de equivalência
+(`test_backend_highs_concorda_com_o_pulp`) confirma **as mesmas deduções** nos
+exemplos; o que muda é o custo por dedução.
 
 ## Otimizações que reduzem o tempo (medidas)
 
@@ -124,18 +168,21 @@ Se o front estiver em outro lugar:
 ### 3. Rodada completa
 
 ```bash
-.venv/bin/python bench_full.py --timeout 3 --node-limit 20000 --workers 2
+.venv/bin/python bench_full.py --timeout 3 --node-limit 20000 --workers 4
 .venv/bin/python build_report.py
 ```
 
-Tempo medido: **~45 min** com 2 núcleos e orçamento de 3 s por execução.
+Tempo medido: **~45 min** com 2 núcleos e orçamento de 3 s por execução. Com o
+backend highspy e 4 workers, o mesmo conjunto fica bem mais rápido; o número
+exato depende de quantos tabuleiros cabem no orçamento de 3 s.
 
 | Opção | Para quê |
 |---|---|
 | `--timeout 3` | segundos por execução (o orçamento que define o resultado) |
 | `--node-limit 20000` | teto de nós por execução |
-| `--workers 2` | processos em paralelo (use o nº de núcleos) |
-| `--pilot` | amostra estratificada (2 por tamanho, ~11 min) para estimar antes |
+| `--workers 4` | processos em paralelo (use o nº de núcleos físicos) |
+| `--lp-backend auto` | `auto`/`highs` usam highspy persistente; `pulp` usa o backend antigo |
+| `--pilot` | amostra estratificada (2 por tamanho, ~2 min com highspy) para estimar antes |
 | `--porte médio --porte grande` | restringe por porte |
 | `--solver lp-patterns` | roda um método só |
 | `--deadline 3000` | para tudo e grava o que já saiu |
@@ -332,5 +379,9 @@ podem terminar em soluções diferentes. Os testes refletem isso:
 - `most_fractional` **não** prova nada: valor 0,5 é sintoma, não veredito. A
   dedução válida é sempre por inviabilidade.
 - O probing gasta 2 PLs por célula por rodada; `max_probes_per_node` limita isso.
+- O backend highspy implementa o modelo **sem** fluxo de conectividade. Se
+  `connectivity_lp=True`, o código cai automaticamente no PuLP.
+- O scheduler de threads do HiGHS é global; o backend não fixa `threads` para
+  não conflitar com modelos criados por outros backends no mesmo processo.
 - Os tabuleiros em `examples/` foram gerados e validados para o benchmark —
   não são tabuleiros publicados.

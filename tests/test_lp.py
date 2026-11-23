@@ -14,7 +14,8 @@ from tapa_solver_deterministico.model import BLACK, Board, Puzzle
 from tapa_solver_deterministico.solver import solve as solve_det
 from tapa_solver_deterministico.verifier import verify
 
-from tapa_lp import LPConfig, TapaRelaxation, count_solutions, solve_with_lp
+from tapa_lp import (HIGHS_AVAILABLE, HighsRelaxation, LPConfig, TapaRelaxation,
+                     count_solutions, solve_with_lp)
 from tapa_lp.io_puzzles import load_puzzle
 
 EXEMPLOS = pathlib.Path(__file__).resolve().parents[1] / "examples"
@@ -65,6 +66,34 @@ def test_deducoes_da_pl_sao_corretas_em_todas_as_solucoes(path):
 
     erros = [puzzle.cell(i) for i, v in forced.items() if ref.board.values[i] != v]
     assert not erros, f"{path.name}: deduções erradas em {erros}"
+
+
+@pytest.mark.skipif(not HIGHS_AVAILABLE, reason="highspy não instalado")
+@pytest.mark.parametrize("path", ARQUIVOS, ids=lambda p: p.name)
+def test_backend_highs_concorda_com_o_pulp(path):
+    """Os dois backends montam o mesmo modelo: mesmas deduções por inviabilidade."""
+    puzzle = load_puzzle(path)
+    valores = [-1] * (puzzle.rows * puzzle.cols)
+    for r, c in puzzle.clues:
+        valores[puzzle.index(r, c)] = 0
+
+    rel_pulp = TapaRelaxation(puzzle, connectivity=False, solver_name="cbc")
+    ok_pulp, forced_pulp = rel_pulp.probe(valores)
+
+    rel_highs = HighsRelaxation(puzzle)
+    ok_highs, forced_highs = rel_highs.probe(valores)
+
+    assert ok_pulp == ok_highs, path.name
+    assert forced_pulp == forced_highs, path.name
+
+
+@pytest.mark.skipif(not HIGHS_AVAILABLE, reason="highspy não instalado")
+@pytest.mark.parametrize("path", RAPIDOS, ids=lambda p: p.name)
+def test_backend_highs_forcado_resolve_os_exemplos(path):
+    puzzle = load_puzzle(path)
+    r = solve_with_lp(puzzle, LPConfig(lp_backend="highs"), **ORCAMENTO)
+    assert r.solved, r.message
+    assert verify(r.board).valid
 
 
 @pytest.mark.parametrize("path", ARQUIVOS, ids=lambda p: p.name)

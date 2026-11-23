@@ -65,7 +65,8 @@ def _trabalho(tarefa: dict) -> dict:
                        branch={"lp-first": "first", "lp-frac": "most_fractional",
                                "lp-patterns": "fewest_patterns"}[args_s["solver"]],
                        value_order=("black_first" if args_s["solver"] == "lp-first" else "lp_guided"),
-                       probe_depth=2, lp_time_limit=2.0)
+                       probe_depth=2, lp_time_limit=2.0,
+                       lp_backend=args_s.get("lp_backend", "auto"))
         r = solve_with_lp(puzzle, cfg, timeout_seconds=args_s["timeout"], node_limit=args_s["node_limit"])
         board, solved, msg, s = r.board, r.solved, r.message, r.stats
         lp_solves = s.lp_solves
@@ -98,6 +99,8 @@ if __name__ == "__main__":
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--deadline", type=float, default=0, help="segundos de orçamento total")
     ap.add_argument("--solver", action="append", choices=SOLVERS, help="restringe os métodos (pode repetir)")
+    ap.add_argument("--lp-backend", choices=["auto", "highs", "pulp"], default="auto",
+                    help="backend da relaxação: highspy persistente (auto/highs) ou PuLP (pulp)")
     ap.add_argument("--porte", action="append", choices=["pequeno", "médio", "grande", "extragrande"])
     ap.add_argument("--out", default="results/full_results.jsonl")
     a = ap.parse_args()
@@ -121,8 +124,14 @@ if __name__ == "__main__":
     if a.limit:
         boards = boards[: a.limit]
 
-    tarefas = [{"board": b, "solver_spec": {"solver": s, "timeout": a.timeout, "node_limit": a.node_limit}} for b in boards for s in SOLVERS]
-    print(f"tabuleiros={len(boards)} métodos={len(SOLVERS)} execuções={len(tarefas)}", flush=True)
+    tarefas = [{"board": b, "solver_spec": {"solver": s, "timeout": a.timeout,
+                                            "node_limit": a.node_limit,
+                                            "lp_backend": a.lp_backend}}
+               for b in boards for s in SOLVERS]
+    # Mais caros primeiro: reduz a cauda quando os últimos workers ficam ociosos.
+    tarefas.sort(key=lambda t: -(t["board"]["width"] * t["board"]["height"]))
+    print(f"tabuleiros={len(boards)} métodos={len(SOLVERS)} execuções={len(tarefas)} "
+          f"backend={a.lp_backend}", flush=True)
 
     Path("results").mkdir(exist_ok=True)
     saida = Path(a.out)
@@ -131,8 +140,7 @@ if __name__ == "__main__":
     feito = 0
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=a.workers) as ex:
-        futuros = {ex.submit(_trabalho, t): (t["board"]["id"], t["solver_spec"]["solver"])
-                   for t in tarefas}
+        futuros = {ex.submit(_trabalho, t): t for t in tarefas}
         with saida.open("a", encoding="utf-8") as f:
             for fut in as_completed(futuros):
                 if a.deadline and time.time() - t0 > a.deadline:
@@ -143,10 +151,14 @@ if __name__ == "__main__":
                 try:
                     r = fut.result()
                 except Exception as exc:
-                    bid, sv = futuros[fut]
-                    r = {"board": bid, "solver": sv, "status": "erro-interno", "error": repr(exc),
+                    b_ = futuros[fut]["board"]
+                    r = {"board": b_["id"], "source": b_.get("source"),
+                         "width": b_["width"], "height": b_["height"],
+                         "area": b_["width"] * b_["height"],
+                         "solver": futuros[fut]["solver_spec"]["solver"],
+                         "status": "erro-interno", "error": repr(exc),
                          "nodes": None, "backtracks": None, "lpSolves": None,
-                         "gabarito": None, "elapsed": None}
+                         "gabarito": None, "verified": False, "elapsed": None}
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
                 f.flush()
                 feito += 1

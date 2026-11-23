@@ -24,10 +24,12 @@ from tapa_solver_deterministico.patterns import compatible_patterns
 from tapa_solver_deterministico.propagation import Contradiction, propagate
 from tapa_solver_deterministico.verifier import verify
 
+from .highs_backend import HIGHS_AVAILABLE, HighsRelaxation
 from .lp_model import FEASIBLE, TapaRelaxation
 
 Branch = Literal["first", "most_fractional", "fewest_patterns"]
 ValueOrder = Literal["black_first", "lp_guided"]
+Backend = Literal["auto", "highs", "pulp"]
 
 
 @dataclass(slots=True)
@@ -45,7 +47,8 @@ class LPConfig:
     probe_scope: str = "near_clue"      # "all" | "near_clue" (células em anel de pista)
     integral_exit: bool = True          # PL já 0/1 e válida -> retorna sem buscar
     connectivity_lp: bool = False       # fluxo no modelo de PL (caro e frouxo)
-    solver_name: str = "auto"           # "auto" | "cbc" | "highs"
+    lp_backend: Backend = "auto"        # "auto" | "highs" | "pulp"
+    solver_name: str = "auto"           # usado só no backend PuLP: "auto" | "cbc" | "highs"
 
 
 @dataclass(slots=True)
@@ -117,8 +120,18 @@ def solve_with_lp(
     cfg = config or LPConfig()
     stats = LPSearchStats()
     started = time.monotonic()
-    relaxation = (TapaRelaxation(puzzle, connectivity=cfg.connectivity_lp, solver_name=cfg.solver_name)
-                  if cfg.use_probe or cfg.branch != "first" or cfg.integral_exit else None)
+    precisa_pl = cfg.use_probe or cfg.branch != "first" or cfg.integral_exit
+    use_highs = (cfg.lp_backend in {"auto", "highs"} and HIGHS_AVAILABLE
+                 and not cfg.connectivity_lp)
+    if not precisa_pl:
+        relaxation = None
+    elif use_highs:
+        # Persistente: monta o modelo uma vez e só troca bounds a cada nó.
+        relaxation = HighsRelaxation(puzzle)
+    else:
+        # PuLP: também funciona com conectividade por fluxo (connectivity_lp).
+        relaxation = TapaRelaxation(puzzle, connectivity=cfg.connectivity_lp,
+                                    solver_name=cfg.solver_name)
     near_clue: set[int] = set()
     for clue_cell in puzzle.clues:
         r0, c0 = clue_cell

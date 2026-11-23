@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import pulp
 
@@ -45,7 +46,9 @@ UNKNOWN_STATUS = "unknown"
 DIRS_ORTHO = ((1, 0), (0, 1))
 
 
+@lru_cache(maxsize=1)
 def _tem_highs() -> bool:
+    """Consulta cara (lista executáveis); o resultado não muda em runtime."""
     try:
         return "HiGHS" in pulp.listSolvers(onlyAvailable=True)
     except Exception:
@@ -173,11 +176,12 @@ class TapaRelaxation:
             return INFEASIBLE
         started = time.monotonic()
         nome = self.solver_name
+        tem_highs = _tem_highs()
         if nome == "auto":
-            nome = "hi_highs" if _tem_highs() else "cbc"
+            nome = "hi_highs" if tem_highs else "cbc"
         cbc = (pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit) if time_limit
                else pulp.PULP_CBC_CMD(msg=False))
-        if nome in {"hi_highs", "highs"} and _tem_highs():
+        if nome in {"hi_highs", "highs"} and tem_highs:
             solver = pulp.HiGHS(msg=False, timeLimit=time_limit) if time_limit else pulp.HiGHS(msg=False)
         else:
             solver = cbc

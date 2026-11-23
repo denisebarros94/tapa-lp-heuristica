@@ -13,8 +13,11 @@ pasta/
 ```bash
 cd tapa-lp-heuristica
 python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"     # Windows: py -m venv .venv  /  .venv\Scripts\python.exe -m pip install -e ".[dev]"
+.venv/bin/pip install -e ".[dev,highs]"   # Windows: py -m venv .venv  /  .venv\Scripts\python.exe -m pip install -e ".[dev,highs]"
 ```
+
+O extra `highs` instala o `highspy`, usado pelo backend de PL persistente. Sem
+ele, a API continua funcionando com o backend PuLP/CBC (mais lento).
 
 ## Subir
 

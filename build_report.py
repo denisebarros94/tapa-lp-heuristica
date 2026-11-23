@@ -28,15 +28,23 @@ CAMPOS = ["Método", "Tabuleiro", "Fonte", "Dimensão", "Células", "Status", "G
           "Nós", "Backtracks", "Decisões", "Chamadas PL", "Tempo (s)", "Tempo solver (s)", "Mensagem"]
 
 
-def porte(area: int) -> str:
-    dim = int(area ** 0.5)
+def porte(r: dict) -> str:
+    """Mesma classificação do bench_full: usa a maior dimensão do tabuleiro."""
+    width, height = r.get("width"), r.get("height")
+    dim = max(width, height) if width and height else int((r.get("area") or 0) ** 0.5)
     return "pequeno" if dim <= 8 else ("médio" if dim <= 10 else ("grande" if dim <= 15 else "extragrande"))
+
+
+def _dimensao(r: dict) -> str:
+    width, height = r.get("width"), r.get("height")
+    return f"{width}x{height}" if width and height else "—"
 
 
 def linha(r: dict) -> list:
     g = r.get("gabarito")
-    return [NOME.get(r["solver"], r["solver"]), r["board"], r.get("source", ""),
-            f'{r["width"]}x{r["height"]}', r.get("area", ""), r["status"],
+    solver = r.get("solver", "?")
+    return [NOME.get(solver, solver), r.get("board", "?"), r.get("source", ""),
+            _dimensao(r), r.get("area", ""), r.get("status", "?"),
             "confere" if g is True else ("diferente" if g is False else "—"),
             r.get("nodes"), r.get("backtracks"), r.get("decisions"), r.get("lpSolves"),
             r.get("elapsed"), r.get("solverElapsed"), (r.get("message") or r.get("error") or "")]
@@ -80,8 +88,8 @@ def main() -> None:
             continue
         linha_p = {"Método": NOME[m]}
         for p in portes:
-            rs = [r for r in rs_m if porte(r.get("area") or r["width"] * r["height"]) == p
-                  and r["status"] != "n/a (teto PL)"]
+            rs = [r for r in rs_m if r.get("width") and r.get("height") and porte(r) == p
+                  and r.get("status") != "n/a (teto PL)"]
             ok = [r for r in rs if r["status"] == "resolvido"]
             linha_p[p] = f"{len(ok)}/{len(rs)}" if rs else "—"
         por_porte.append(linha_p)
